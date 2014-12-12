@@ -21,6 +21,9 @@ def main(fin,fout):
 	"""
 	hdulist = fits.open(fin)
 	data = hdulist[0].data
+	dshape = data.shape
+	#remove axes that are empty
+	data=data.squeeze()
 	#turn pixels that are identically zero, into masked pixels
 	data[np.where(data==0.)]=np.nan
 
@@ -52,7 +55,10 @@ def main(fin,fout):
 			break
 	print jmax
 
-	hdulist[0].data = data[jmin:jmax,imin:imax]
+	data = data[jmin:jmax,imin:imax]
+	#remember the shape of the data
+	np.resize(data,dshape)
+	hdulist[0].data = data
 	#recenter the image so the coordinates are correct.
 	hdulist[0].header['CRPIX1']-=imin
 	hdulist[0].header['CRPIX2']-=jmin
