@@ -21,7 +21,7 @@ def main(fin,fout):
 	"""
 	hdulist = fits.open(fin)
 	data = hdulist[0].data
-	dshape = data.shape
+	dshape = list(data.shape) #remeber this for later
 	#remove axes that are empty
 	data=data.squeeze()
 	#turn pixels that are identically zero, into masked pixels
@@ -56,7 +56,9 @@ def main(fin,fout):
 	print jmax
 
 	data = data[jmin:jmax,imin:imax]
-	#remember the shape of the data
+	dshape[-1] = data.shape[-1]
+	dshape[-2] = data.shape[-2]
+	#restore the shape of the data
 	np.resize(data,dshape)
 	hdulist[0].data = data
 	#recenter the image so the coordinates are correct.
