@@ -1,22 +1,19 @@
 #! python
 
 __author__ = "PaulHancock"
-__date__ = "11/08/2016"
+__date__ = "18/08/2016"
 
-import math
 import numpy as np
 import os
 from scipy import interpolate
 from scipy.interpolate import LinearNDInterpolator
 from astropy import wcs
 from astropy.io import fits
-from astropy.coordinates import SkyCoord, Angle, Latitude, Longitude
-import astropy.units as u
 import sys
 import argparse
 
 
-def make_models(fname, ra1='ra', dec1='dec', ra2='RAJ2000', dec2='DEJ2000', plots=False):
+def make_pix_models(fname, ra1='ra', dec1='dec', ra2='RAJ2000', dec2='DEJ2000', fitsname=None, plots=False):
     """
     Read a fits file which contains the crossmatching results for two catalogues.
     Catalogue 1 is the source catalogue (positions that need to be corrected)
@@ -32,77 +29,112 @@ def make_models(fname, ra1='ra', dec1='dec', ra2='RAJ2000', dec2='DEJ2000', plot
     """
     raw_data = fits.open(fname)[1].data
 
+    # get the wcs
+    hdr = fits.getheader(fitsname)
+    imwcs = wcs.WCS(hdr, naxis=2)
+
     # filter the data to only include SNR>10 sources
     flux_mask = np.where(raw_data['peak_flux']/raw_data['local_rms']>10)
     data = raw_data[flux_mask]
 
     #calculate the offsets in the ra/dec directions
-    catalog = Longitude(data[ra1], unit=u.degree), Latitude(data[dec1], unit=u.degree)
-    reference = Longitude(data[ra2], unit=u.degree), Latitude(data[dec2], unit=u.degree)
+    # catalog = Longitude(data[ra1], unit=u.degree), Latitude(data[dec1], unit=u.degree)
+    # reference = Longitude(data[ra2], unit=u.degree), Latitude(data[dec2], unit=u.degree)
 
-    dra = (reference[0]-catalog[0]).degree
-    ddec = (reference[1]-catalog[1]).degree
+    cat_xy = imwcs.all_world2pix(zip(data[ra1], data[dec1]), 1)
+    ref_xy = imwcs.all_world2pix(zip(data[ra2], data[dec2]), 1)
 
-    dramodel = interpolate.Rbf(catalog[0].degree, catalog[1].degree, dra, function='linear', smooth=3)
-    ddecmodel = interpolate.Rbf(catalog[0].degree, catalog[1].degree, ddec, function='linear', smooth=3)
+    diff_xy = ref_xy - cat_xy
+
+    dxmodel = interpolate.Rbf(cat_xy[:, 0], cat_xy[:, 1], diff_xy[:, 0], function='linear', smooth=3)
+    dymodel = interpolate.Rbf(cat_xy[:, 0], cat_xy[:, 1], diff_xy[:, 1], function='linear', smooth=3)
 
     if plots:
         from matplotlib import pyplot
-        xmin,xmax = math.floor(np.nanmin(catalog[0].degree)), math.ceil(np.nanmax(catalog[0].degree))
-        ymin,ymax = math.floor(np.nanmin(catalog[1].degree)), math.ceil(np.nanmax(catalog[1].degree))
+        xmin, xmax = 0, hdr['NAXIS1']
+        ymin, ymax = 0, hdr['NAXIS2']
 
-        smax = np.max(np.hypot(dra, ddec))*3600
+        gx, gy = np.mgrid[xmin:xmax:(xmax-xmin)/20., ymin:ymax:(ymax-ymin)/20.]
+        mdx = dxmodel(np.ravel(gx), np.ravel(gy))
+        mdy = dymodel(np.ravel(gx), np.ravel(gy))
 
-        fig = pyplot.figure(figsize=(28, 7))
+        x = cat_xy[:, 0]
+        y = cat_xy[:, 1]
+        dx = diff_xy[:, 0]
+        dy = diff_xy[:, 1]
 
+        fig = pyplot.figure(figsize=(14, 7))
+        kwargs = {'angles':'xy', 'scale_units':'xy', 'scale':1, 'cmap':'hsv'} #, 'vmin':-180, 'vmax':180}
+        angles = np.degrees(np.arctan2(dy, dx))
         ax = fig.add_subplot(1, 2, 1)
-        ax.quiver(X, Y, 60*dra, 60*ddec, np.arctan2(dra,ddec), angles='xy', scale_units='xy', scale=1)
-        ax.set_title("source vectors")
+        cax = ax.quiver(x, y, dx*60, dy*60, angles, **kwargs)
+        ax.set_xlim((xmin, xmax))
+        ax.set_ylim((ymin, ymax))
+        ax.set_title("Offsets")
+        cbar = fig.colorbar(cax, orientation='horizontal')
 
         ax = fig.add_subplot(1, 2, 2)
-        ax.quiver(vunwrap(gridX), gridY, 60*U, 60*V, np.arctan2(U,V), angles='xy', scale_units='xy', scale=1)
+        cax = ax.quiver(gx, gy, mdx*60, mdy*60, np.degrees(np.arctan2(mdy, mdx)), **kwargs)
+        ax.set_xlim((xmin, xmax))
+        ax.set_ylim((ymin, ymax))
         ax.set_title("model vectors")
-
-        ax = fig.add_subplot(1, 4, 1)
-        cax = ax.scatter(catalog[0].degree, catalog[1].degree, c=dra*3600,
-                         edgecolor='', vmin=-1*smax, vmax=smax)
-        ax.set_xlim((xmin, xmax))
-        ax.set_ylim((ymin, ymax))
-        ax.set_title("DRA")
-        cbar = fig.colorbar(cax, orientation='horizontal')
-
-        ax = fig.add_subplot(1, 4, 2)
-        cax = ax.scatter(catalog[0].degree, catalog[1].degree, c=ddec*3600,
-                         edgecolor='', vmin=-1*smax, vmax=smax)
-        ax.set_xlim((xmin, xmax))
-        ax.set_ylim((ymin, ymax))
-        ax.set_title("DDec")
-        cbar = fig.colorbar(cax, orientation='horizontal')
-
-
-        ax = fig.add_subplot(1, 4, 3)
-        cax = ax.scatter(catalog[0].degree, catalog[1].degree, c=np.hypot(dra, ddec)*3600,
-                         edgecolor='', vmin=0, vmax=smax)
-        ax.set_xlim((xmin, xmax))
-        ax.set_ylim((ymin, ymax))
-        ax.set_title('offset')
-        cbar = fig.colorbar(cax, orientation='horizontal')
-
-        ax = fig.add_subplot(1, 4, 4)
-        cax = ax.scatter(catalog[0].degree, catalog[1].degree, c=np.degrees(np.arctan2(dra, ddec)),
-                         edgecolor='', vmin=-180, vmax=180)
-        ax.set_xlim((xmin, xmax))
-        ax.set_ylim((ymin, ymax))
-        ax.set_title('angle')
         cbar = fig.colorbar(cax, orientation='horizontal')
 
         outname = os.path.splitext(fname)[0] +'.png'
         pyplot.savefig(outname, dpi=200)
 
-    return dramodel, ddecmodel
+    return dxmodel, dymodel
 
 
-def correct_image(fname, dramodel, ddecmodel, fout):
+def correct_image(fname, dxmodel, dymodel, fout):
+    """
+    Read a fits image, and apply pixel-by-pixel corrections based on the
+    given x/y models. Interpolate back to a regular grid, and then write an
+    output file
+    :param fname: input fits file
+    :param dxodel: x model
+    :param dymodel: x model
+    :param fout: output fits file
+    :return: None
+    """
+    im = fits.open(fname)
+    data = np.squeeze(im[0].data)
+    # create a map of (x,y) pixel pairs as a list of tuples
+    xy = np.indices(data.shape, dtype=np.float32)
+    xy.shape = (2, xy.shape[1]*xy.shape[2])
+
+    x = np.array(xy[1, :])
+    y = np.array(xy[0, :])
+
+    # calculate the corrections in blocks of 100k since the rbf fails on large blocks
+    print 'applying corrections',
+    if len(x) > 100000:
+        print 'in cycles'
+        borders = range(0, len(x)+1, 100000)
+        if borders[-1] != len(x):
+            borders.append(len(x))
+        for s1 in [slice(a, b) for a, b in zip(borders[:-1], borders[1:])]:
+            x[s1] += dxmodel(x[s1], y[s1])
+            # the x coords were just changed so we need to refer back to the original coords
+            y[s1] += dymodel(xy[1, :][s1], y[s1])
+    else:
+        print 'all at once'
+        x += dxmodel(x, y)
+        y += dymodel(xy[1, :], y)
+
+    print 'interpolating'
+    ifunc = LinearNDInterpolator(np.transpose([x,y]), np.ravel(data))
+    interpolated_map = ifunc(xy[1, :], xy[0, :])
+
+    print 'writing'
+    interpolated_map.shape = data.shape
+    im[0].data = interpolated_map
+    im.writeto(fout, clobber=True)
+    print "wrote", fout
+    return
+
+
+def correct_catalogue(fname, dramodel, ddecmodel, fout):
     """
     Read a fits image, and apply pixel-by-pixel ra/dec corrections based on the
     given dra/ddec models. Interpolate back to a regular grid, and then write an
@@ -132,8 +164,8 @@ def correct_image(fname, dramodel, ddecmodel, fout):
         if borders[-1] != len(ra):
             borders.append(len(ra))
         for s1 in [slice(a, b) for a, b in zip(borders[:-1], borders[1:])]:
-            ra[s1] += dramodel(ra[s1], dec[s1])
-            dec[s1] += ddecmodel(ra[s1], dec[s1])
+            ra[s1] += dramodel(ra[s1], dec[s1]) * scale
+            dec[s1] += ddecmodel(ra[s1], dec[s1]) * scale
     else:
         ra += dramodel(ra, dec)
         dec += ddecmodel(ra, dec)
@@ -153,7 +185,6 @@ def correct_image(fname, dramodel, ddecmodel, fout):
     im.writeto(fout, clobber=True)
     print "wrote", fout
     return
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -186,16 +217,16 @@ if __name__ == "__main__":
         sys.exit()
 
     if results.test:
-        dra, ddec = make_models('xmatched.fits', dec2='DECJ2000')
+        dra, ddec = make_models('xmatched.fits', dec2='DECJ2000', plots=True)
         correct_image('small.fits', dra, ddec, 'small_corr.fits')
         sys.exit()
 
     if results.infits is not None or results.plot:
-        dra, ddec = make_models(results.xm, results.ra1, results.dec1, results.ra2, results.dec2, results.plot)
-
+        dx, dy = make_pix_models(results.xm, results.ra1, results.dec1, results.ra2, results.dec2,
+                                 results.infits, results.plot)
     if results.infits is not None:
         if os.path.exists(results.infits):
-            correct_image(results.infits, dra, ddec, results.outfits)
+            correct_image(results.infits, dx, dy, results.outfits)
         else:
             print "File:{0} not found".format(results.infits)
     else:
