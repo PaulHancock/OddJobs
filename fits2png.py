@@ -27,13 +27,14 @@ def main2(infile,outfile):
 	import numpy as np
 	import os
 	image = np.flipud(np.squeeze(fits.open(infile)[0].data))
+	minmax = np.percentile(image.ravel(),[0.1,99.9])
 	figure = pyplot.figure(figsize=(5,5))
 	ax=figure.add_subplot(111)
-	cbax = ax.imshow(image,cmap=pyplot.cm.cubehelix,vmin=-2,vmax=10,interpolation='nearest')
+	cbax = ax.imshow(image,cmap=pyplot.cm.cubehelix,vmin=minmax[0],vmax=minmax[1],interpolation='nearest')
 	ax.set_xticks([])
 	ax.set_yticks([])
 	ax.set_title(os.path.basename(infile))
-	cb=pyplot.colorbar(mappable=cbax,orientation='vertical',ticks=range(-2,12,2),shrink=0.75)
+	cb=pyplot.colorbar(mappable=cbax,orientation='vertical',shrink=0.75)
 	cb.set_label('Jy')
 	figure.subplots_adjust(left=0.05,right=0.95,bottom=0.05,top=0.95)
 	pyplot.savefig(outfile)
